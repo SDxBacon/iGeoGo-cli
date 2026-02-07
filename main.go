@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"iGeoGo-cli/simulatelocation"
 	"iGeoGo-cli/tunnel"
 	"iGeoGo-cli/utils"
 	"log"
@@ -11,9 +12,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-
-	"github.com/danielpaulus/go-ios/ios"
-	"github.com/danielpaulus/go-ios/ios/instruments"
 )
 
 func logInputHelp() {
@@ -23,29 +21,10 @@ func logInputHelp() {
 	fmt.Println("  - Exit: 'quit' or Ctrl+C'")
 }
 
-func startSimulateLocation(device ios.DeviceEntry, coordinates []utils.Coordinate) {
+func startSimulateLocation(service *simulatelocation.SimlulateLocationService, coordinates []utils.Coordinate) {
 	go func() {
-		// create rsd device connection
-		tun, err := tunnel.GetTunnelForDevice(device.Properties.SerialNumber)
-		if err != nil {
-			log.Printf("Failed to get tunnel for device %s: %v", device.Properties.SerialNumber, err)
-			return
-		}
-		rsdDevice, err := utils.NewDeviceWithRsd(device, tun)
-		if err != nil {
-			log.Printf("Failed to create RSD device for %s: %v", device.Properties.SerialNumber, err)
-			return
-		}
-
-		// create location simulation service
-		service, err := instruments.NewLocationSimulationService(rsdDevice)
-		if err != nil {
-			log.Fatalf("Failed to create location service: %v\nMake sure Developer Mode is enabled on device", err)
-		}
-		defer service.StopSimulateLocation()
-
 		if len(coordinates) < 2 {
-			err = service.StartSimulateLocation(coordinates[0].Lat, coordinates[0].Lng)
+			_, err := service.Set(coordinates[0])
 			if err != nil {
 				log.Fatalf("Failed to start location simulation: %v", err)
 			}
@@ -61,7 +40,7 @@ func startSimulateLocation(device ios.DeviceEntry, coordinates []utils.Coordinat
 
 				// 呼叫 simulateLocation 函數來模擬位置更新
 				log.Printf("Starting location simulation...")
-				err = service.StartSimulateLocation(coord.Lat, coord.Lng)
+				_, err := service.Set(coord)
 				if err != nil {
 					log.Fatalf("Failed to start location simulation: %v", err)
 				}
@@ -73,7 +52,6 @@ func startSimulateLocation(device ios.DeviceEntry, coordinates []utils.Coordinat
 
 		// 完成模擬，再 log 一個 helper 訊息
 		logInputHelp()
-
 	}()
 }
 
@@ -120,6 +98,7 @@ func main() {
 	}()
 
 	// 主循環：無止盡收 scanner 或 ctx.Done
+	var service *simulatelocation.SimlulateLocationService
 	for {
 		select {
 		case <-ctx.Done():
@@ -132,6 +111,12 @@ func main() {
 			if input == "quit" || input == "exit" {
 				fmt.Println("Exiting...")
 				return
+			}
+
+			// 如果 Simulate Location Service 還沒建立，就先建立一次
+			if service == nil {
+				service = simulatelocation.NewSimulateLocationService(device)
+				defer service.Destory() // 確保在 main 函數結束時停止模擬
 			}
 
 			var coords []utils.Coordinate
@@ -161,7 +146,7 @@ func main() {
 			// }
 			// TODO: 將座標設定到 iOS 設備
 
-			startSimulateLocation(device, coords)
+			startSimulateLocation(service, coords)
 		}
 	}
 }
