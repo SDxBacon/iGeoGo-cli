@@ -2,13 +2,13 @@ package tunnel
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/danielpaulus/go-ios/ios/tunnel"
 	iostunnel "github.com/danielpaulus/go-ios/ios/tunnel"
 )
 
@@ -28,60 +28,70 @@ func NewIGeoGoIosTunnel() *IGeoGoIosTunnel {
 }
 
 func (t *IGeoGoIosTunnel) Start() error {
-	// 建立 PairRecordManager
-	pm, err := iostunnel.NewPairRecordManager(t.PairRecordPath)
-	if err != nil {
-		return fmt.Errorf("could not create pair record manager: %w", err)
-	}
-
-	// 建立 TunnelManager
-	tm := iostunnel.NewTunnelManager(pm, t.UseUserspaceNetworking)
-
-	// 建立一個會在收到 SIGINT 或 SIGTERM 時自動取消的 context
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop() // 確保在函數結束時停止監聽信號
-
-	// 啟動定期更新 tunnel 的 goroutine
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
+		// 建立 PairRecordManager
+		pm, err := iostunnel.NewPairRecordManager(t.PairRecordPath)
+		if err != nil {
+			log.Fatalf("Failed to create PairRecordManager: %v", err)
+		}
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				err := tm.UpdateTunnels(ctx)
-				if err != nil {
-					log.Printf("Warning: failed to update tunnels: %v", err)
-				} else {
-					// 印出所有活躍的 tunnels
-					// tunnels, err := tm.ListTunnels()
-					_, err := tm.ListTunnels()
+		// 建立 TunnelManager
+		tm := iostunnel.NewTunnelManager(pm, t.UseUserspaceNetworking)
+
+		// 建立一個會在收到 SIGINT 或 SIGTERM 時自動取消的 context
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop() // 確保在函數結束時停止監聽信號
+
+		// 啟動定期更新 tunnel 的 goroutine
+		go func() {
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					err := tm.UpdateTunnels(ctx)
 					if err != nil {
-						log.Printf("Warning: failed to list tunnels: %v", err)
-						continue
+						log.Printf("Warning: failed to update tunnels: %v", err)
+					} else {
+						// 印出所有活躍的 tunnels
+						// tunnels, err := tm.ListTunnels()
+						_, err := tm.ListTunnels()
+						if err != nil {
+							log.Printf("Warning: failed to list tunnels: %v", err)
+							continue
+						}
+						// if len(tunnels) > 0 {
+						// 	log.Printf("Active tunnels: %d", len(tunnels))
+						// 	for _, t := range tunnels {
+						// 		log.Printf("  UDID: %s, Address: %s, RSD Port: %d, Userspace Port: %d",
+						// 			t.Udid, t.Address, t.RsdPort, t.UserspaceTUNPort)
+						// 	}
+						// }
 					}
-					// if len(tunnels) > 0 {
-					// 	log.Printf("Active tunnels: %d", len(tunnels))
-					// 	for _, t := range tunnels {
-					// 		log.Printf("  UDID: %s, Address: %s, RSD Port: %d, Userspace Port: %d",
-					// 			t.Udid, t.Address, t.RsdPort, t.UserspaceTUNPort)
-					// 	}
-					// }
 				}
 			}
-		}
-	}()
+		}()
 
-	// 使用正確的 tunnel.ServeTunnelInfo 函數啟動 HTTP API
-	go func() {
-		log.Printf("Starting tunnel info server on port %d", t.TunnelInfoPort)
-		err := iostunnel.ServeTunnelInfo(tm, t.TunnelInfoPort)
-		if err != nil {
-			log.Fatalf("Failed to start tunnel server: %v", err)
-		}
+		// 使用正確的 tunnel.ServeTunnelInfo 函數啟動 HTTP API
+		go func() {
+			log.Printf("Starting tunnel info server on port %d", t.TunnelInfoPort)
+			err := iostunnel.ServeTunnelInfo(tm, t.TunnelInfoPort)
+			if err != nil {
+				log.Fatalf("Failed to start tunnel server: %v", err)
+			}
+		}()
+
+		<-ctx.Done() // 等待直到收到中斷信號
 	}()
 
 	return nil
+}
+
+// GetTunnelForDevice retrieves the tunnel information for a given device UDID.
+func GetTunnelForDevice(udid string) (tunnel.Tunnel, error) {
+	tun, err := tunnel.TunnelInfoForDevice(udid, "localhost", 28100)
+	return tun, err
 }
