@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -23,32 +24,41 @@ func logInputHelp() {
 
 func startSimulateLocation(service *simulatelocation.SimlulateLocationService, coordinates []utils.Coordinate) {
 	go func() {
-		if len(coordinates) < 2 {
-			_, err := service.Set(coordinates[0])
-			if err != nil {
-				log.Fatalf("Failed to start location simulation: %v", err)
-			}
+		coordChan := make(chan utils.Coordinate)
+		var wg sync.WaitGroup
 
+		// Worker: 依序從 channel 收座標，逐一呼叫 service.Set
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for coord := range coordChan {
+				_, err := service.Set(coord)
+				if err != nil {
+					log.Printf("Failed to set location: %v", err)
+				}
+			}
+		}()
+
+		if len(coordinates) < 2 {
+			coordChan <- coordinates[0]
 		} else {
 			// 模擬騎行（單位: km/h）
 			speed := 15.0
 
-			// 定義位置更新的回調函數
+			// 定義位置更新的回調函數，只負責印 log 和送座標給 worker
 			onPositionUpdate := func(coord utils.Coordinate, index int, totalDistance float64) {
 				fmt.Printf("[位置更新] 點 %d: (%.6f, %.6f), 已騎行 %.2f 公尺\n",
 					index, coord.Lng, coord.Lat, totalDistance)
-
-				// 呼叫 simulateLocation 函數來模擬位置更新
-				log.Printf("Starting location simulation...")
-				_, err := service.Set(coord)
-				if err != nil {
-					log.Fatalf("Failed to start location simulation: %v", err)
-				}
+				coordChan <- coord
 			}
 
 			// 開始模擬騎行！
 			utils.SimulateBikeRide(coordinates, speed, onPositionUpdate)
 		}
+
+		// 通知 worker 沒有更多座標，等待它完成
+		close(coordChan)
+		wg.Wait()
 
 		// 完成模擬，再 log 一個 helper 訊息
 		logInputHelp()
